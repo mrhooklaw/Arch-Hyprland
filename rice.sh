@@ -1,82 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# hypr-quicksetup-reset.sh
-# Force-reset Hyprland + Waybar configs to known-good defaults
-# Run as normal user (not root)
+# Reset Hyprland and related configs safely
 
-info(){ printf '\e[1;34m[INFO]\e[0m %s\n' "$*"; }
-warn(){ printf '\e[1;33m[WARN]\e[0m %s\n' "$*"; }
-err(){ printf '\e[1;31m[ERROR]\e[0m %s\n' "$*"; exit 1; }
-bak(){ printf '.bak.%s' "$(date +%Y%m%d-%H%M%S)"; }
+CONFIG_DIR="$HOME/.config"
 
-# Require bash + Arch
-if [ -z "${BASH_VERSION:-}" ]; then
-  err "Run this script with bash."
-fi
-if [ "$EUID" -eq 0 ]; then
-  err "Do NOT run as root. Use your normal user."
-fi
-command -v pacman >/dev/null 2>&1 || err "This script is for Arch Linux."
+echo "[INFO] Resetting Hyprland configs..."
 
-# ---------- Required packages ----------
-REPO_PKGS=(swaybg waybar dunst rofi kitty thunar polkit-gnome \
-           network-manager-applet pipewire pipewire-pulse wireplumber \
-           grim slurp wl-clipboard mesa)
+# Remove old configs if they exist
+rm -rf "$CONFIG_DIR/hypr" "$CONFIG_DIR/waybar" "$CONFIG_DIR/kitty" "$CONFIG_DIR/dunst"
 
-sudo pacman -S --needed --noconfirm "${REPO_PKGS[@]}"
+mkdir -p "$CONFIG_DIR/hypr" "$CONFIG_DIR/waybar" "$CONFIG_DIR/kitty" "$CONFIG_DIR/dunst"
 
-# ---------- Hyprland install ----------
-if ! pacman -Qi hyprland >/dev/null 2>&1; then
-  if ! sudo pacman -S --noconfirm hyprland; then
-    warn "pacman hyprland failed, falling back to AUR (yay)"
-    if ! command -v yay >/dev/null 2>&1; then
-      sudo pacman -S --needed --noconfirm base-devel git
-      tmpdir="$(mktemp -d)"
-      git clone https://aur.archlinux.org/yay.git "$tmpdir/yay"
-      (cd "$tmpdir/yay" && makepkg -si --noconfirm)
-      rm -rf "$tmpdir"
-    fi
-    yay -S --noconfirm hyprland
-  fi
-fi
-
-# ---------- Config reset ----------
-HYPRDIR="$HOME/.config/hypr"
-WAYBARDIR="$HOME/.config/waybar"
-mkdir -p "$HYPRDIR" "$WAYBARDIR"
-
-# Backup & overwrite Hyprland config
-HYPR_CONF="$HYPRDIR/hyprland.conf"
-if [ -f "$HYPR_CONF" ]; then
-  mv "$HYPR_CONF" "$HYPR_CONF$(bak)"
-  info "Backed up old hyprland.conf"
-fi
-cat > "$HYPR_CONF" <<'HYPRCONF'
-monitor=,preferred,auto,1
-
-exec-once = swaybg -i /usr/share/backgrounds/archlinux/archlinux-simplyblack.png -m fill
-exec-once = waybar
-exec-once = dunst
-exec-once = nm-applet --indicator
-exec-once = /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
-
-bind = SUPER, RETURN, exec, kitty
-bind = SUPER, Q, killactive
-bind = SUPER, M, exit
-bind = SUPER, D, exec, rofi -show drun
-bind = SUPER, F, togglefloating
-bind = SUPER, E, exec, thunar
-
-bind = SUPER, H, movefocus, l
-bind = SUPER, L, movefocus, r
-bind = SUPER, K, movefocus, u
-bind = SUPER, J, movefocus, d
-
-bind = SUPER, 1, workspace, 1
-bind = SUPER, 2, workspace, 2
-bind = SUPER, 3, workspace, 3
-bind = SUPER, 4, workspace, 4
+#####################
+# Hyprland config
+#####################
+cat > "$CONFIG_DIR/hypr/hyprland.conf" <<'EOF'
+# Hyprland base config (safe version, no blur)
 
 general {
     gaps_in = 5
@@ -88,55 +28,90 @@ general {
 
 decoration {
     rounding = 8
-    blur = yes
 }
 
 animations {
     enabled = yes
 }
-HYPRCONF
 
-# Backup & overwrite Waybar config
-WAYBAR_CONF="$WAYBARDIR/config"
-WAYBAR_CSS="$WAYBARDIR/style.css"
-[ -f "$WAYBAR_CONF" ] && mv "$WAYBAR_CONF" "$WAYBAR_CONF$(bak)"
-[ -f "$WAYBAR_CSS" ] && mv "$WAYBAR_CSS" "$WAYBAR_CSS$(bak)"
+exec-once = waybar &
+exec-once = dunst &
+exec-once = nm-applet &
+EOF
 
-cat > "$WAYBAR_CONF" <<'WAYBARCONF'
+#####################
+# Waybar config
+#####################
+mkdir -p "$CONFIG_DIR/waybar"
+
+cat > "$CONFIG_DIR/waybar/config.jsonc" <<'EOF'
 {
   "layer": "top",
-  "position": "top",
-  "modules-left": ["sway/workspaces"],
-  "modules-center": ["clock"],
-  "modules-right": ["pulseaudio", "network"]
+  "modules-left": ["clock"],
+  "modules-center": ["window"],
+  "modules-right": ["network", "battery"],
+  "clock": { "format": "%Y-%m-%d %H:%M:%S" },
+  "network": { "format-wifi": "{essid} {signalStrength}%" },
+  "battery": { "format": "{capacity}% {icon}" }
 }
-WAYBARCONF
+EOF
 
-cat > "$WAYBAR_CSS" <<'WAYBARCSS'
+cat > "$CONFIG_DIR/waybar/style.css" <<'EOF'
 * {
-  font-family: "DejaVu Sans", sans-serif;
-  font-size: 12px;
-  padding: 6px;
+  font-family: JetBrainsMono, monospace;
+  font-size: 13px;
 }
-#clock {
-  font-weight: 600;
+window#waybar {
+  background: #2e3440;
+  color: #eceff4;
 }
-WAYBARCSS
+#clock, #network, #battery {
+  padding: 0 10px;
+}
+EOF
 
-# ---------- Autostart in bash_profile ----------
-PROFILE="$HOME/.bash_profile"
-AUTOSTART_SNIPPET='if [[ -z $DISPLAY ]] && [[ $(tty) == /dev/tty1 ]]; then
-  exec Hyprland
-fi'
+#####################
+# Kitty config
+#####################
+mkdir -p "$CONFIG_DIR/kitty"
 
-if [ -f "$PROFILE" ]; then
-  mv "$PROFILE" "$PROFILE$(bak)"
-  info "Backed up old .bash_profile"
-fi
-printf '#!/usr/bin/env bash\n\n# Auto-start Hyprland on TTY1\n%s\n' "$AUTOSTART_SNIPPET" > "$PROFILE"
+cat > "$CONFIG_DIR/kitty/kitty.conf" <<'EOF'
+font_family JetBrainsMono
+font_size 12
+background_opacity 0.95
+EOF
 
-# ---------- Enable services ----------
-sudo systemctl enable --now NetworkManager
-systemctl --user enable --now pipewire wireplumber || warn "PipeWire user services may need a relogin"
+#####################
+# Dunst config
+#####################
+mkdir -p "$CONFIG_DIR/dunst"
 
-info "Setup complete. Old configs were backed up, new ones written fresh."
+cat > "$CONFIG_DIR/dunst/dunstrc" <<'EOF'
+[global]
+    font = JetBrainsMono 10
+    frame_width = 2
+    separator_height = 2
+    padding = 8
+    horizontal_padding = 8
+    transparency = 0
+    corner_radius = 6
+    monitor = 0
+    follow = mouse
+
+[urgency_low]
+    background = "#3b4252"
+    foreground = "#d8dee9"
+    frame_color = "#88c0d0"
+
+[urgency_normal]
+    background = "#4c566a"
+    foreground = "#eceff4"
+    frame_color = "#81a1c1"
+
+[urgency_critical]
+    background = "#bf616a"
+    foreground = "#eceff4"
+    frame_color = "#bf616a"
+EOF
+
+echo "[DONE] Hyprland environment reset successfully!"
